@@ -50,12 +50,14 @@ else:
                 import yt_dlp
                 import hashlib
                 key=hashlib.sha256(url.encode('utf-8')).hexdigest()[:18]
-                target=Path(tempfile.gettempdir())/f'pickletrack_youtube_{key}.mp4'
-                if not target.exists():
-                    with st.spinner('Retrieving the video from YouTube...'):
+                target_base=Path(tempfile.gettempdir())/f'pickletrack_youtube_{key}'
+                existing=list(Path(tempfile.gettempdir()).glob(f'pickletrack_youtube_{key}.*'))
+                target=existing[0] if existing else None
+                if target is None or not target.exists():
+                    with st.spinner('Retrieving an available video format from YouTube...'):
                         opts={
-                            'format':'best[ext=mp4][height<=720][acodec!=none]/best[ext=mp4][height<=720]/best[ext=mp4]',
-                            'outtmpl':str(target),
+                            'format':'best[height<=720]/best',
+                            'outtmpl':str(target_base)+'.%(ext)s',
                             'noplaylist':True,
                             'quiet':True,
                             'no_warnings':True,
@@ -66,14 +68,17 @@ else:
                         }
                         with yt_dlp.YoutubeDL(opts) as downloader:
                             downloader.download([url])
-                if not target.exists() or not target.stat().st_size or target.stat().st_size>250*1024*1024:
-                    target.unlink(missing_ok=True)
+                        downloaded=list(Path(tempfile.gettempdir()).glob(f'pickletrack_youtube_{key}.*'))
+                        target=downloaded[0] if downloaded else None
+                if target is None or not target.exists() or not target.stat().st_size or target.stat().st_size>250*1024*1024:
+                    if target is not None: target.unlink(missing_ok=True)
                     raise ValueError('Video unavailable, over 15 minutes, or larger than 250 MB.')
                 st.session_state.youtube_video={'path':str(target),'url':url}
                 st.success('YouTube video loaded. You can now calibrate the court and analyse it.')
             except Exception as exc:
                 st.session_state.youtube_video=None
-                st.error(f'YouTube video could not be loaded: {exc}. Download an authorised MP4 and use Upload video instead.')
+                st.error(f'YouTube video could not be loaded: {exc}')
+                st.info('YouTube can restrict access from cloud servers, even when the URL works in a browser. If it continues failing, use an authorised video file with Upload video.')
     youtube_video=st.session_state.get('youtube_video')
     if youtube_video and url!=youtube_video['url']:
         youtube_video=None
@@ -90,7 +95,7 @@ if file is not None or youtube_video:
     else:
         path=Path(youtube_video['path'])
         signature='youtube:'+youtube_video['url']
-        player_video=youtube_video['url']
+        player_video=str(path) if path.suffix.lower()=='.mp4' else None
         if not path.exists():
             st.error('Temporary YouTube video expired. Click Load YouTube video again.')
             st.stop()
@@ -105,7 +110,8 @@ if file is not None or youtube_video:
     col1,col2=st.columns([1.25,1])
     with col1:
         st.subheader('Match footage')
-        st.video(player_video)
+        if player_video is not None: st.video(player_video)
+        else: st.info('Video retrieved for analysis. Playback preview may not support this format; court calibration still works.')
         st.caption(f'{info["width"]}×{info["height"]} • {info["seconds"]:.1f}s • {info["fps"]:.1f} fps')
     with col2:
         st.subheader('Court calibration')
