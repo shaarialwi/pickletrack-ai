@@ -5,3 +5,4 @@ numpy>=1.26
 pandas>=2.1
 plotly>=5.20
 Pillow>=10
+yt-dlp>=2025.1

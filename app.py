@@ -29,19 +29,75 @@ with st.sidebar:
     if not players: players=['Player A']
     st.info('Best results: fixed high/wide camera showing the complete court. Upload consented match footage.')
 
-file=st.file_uploader('Upload match video (MP4 / MOV / AVI)', type=['mp4','mov','avi'])
-if file:
-    # Reruns use deterministic content signature without retaining previous upload records.
+source=st.radio('Video source', ['Upload video', 'YouTube link'], horizontal=True)
+file=None
+youtube_video=None
+if source == 'Upload video':
+    file=st.file_uploader('Upload match video (MP4 / MOV / AVI)', type=['mp4','mov','avi'])
+else:
+    from urllib.parse import urlparse, parse_qs
+    url=st.text_input('YouTube video URL', placeholder='https://www.youtube.com/watch?v=...').strip()
+    st.caption('Public videos only. Use footage you are permitted to analyse. Cloud downloads can be blocked by YouTube.')
+    if st.button('Load YouTube video'):
+        parts=urlparse(url)
+        host=(parts.hostname or '').lower()
+        allowed={'youtube.com','www.youtube.com','m.youtube.com','youtu.be','www.youtu.be','www.youtube-nocookie.com'}
+        valid=parts.scheme=='https' and host in allowed
+        if not valid:
+            st.error('Please enter a valid HTTPS YouTube video URL.')
+        else:
+            try:
+                import yt_dlp
+                import hashlib
+                key=hashlib.sha256(url.encode('utf-8')).hexdigest()[:18]
+                target=Path(tempfile.gettempdir())/f'pickletrack_youtube_{key}.mp4'
+                if not target.exists():
+                    with st.spinner('Retrieving the video from YouTube...'):
+                        opts={
+                            'format':'best[ext=mp4][height<=720][acodec!=none]/best[ext=mp4][height<=720]/best[ext=mp4]',
+                            'outtmpl':str(target),
+                            'noplaylist':True,
+                            'quiet':True,
+                            'no_warnings':True,
+                            'max_filesize':250*1024*1024,
+                            'match_filter':yt_dlp.utils.match_filter_func('duration <= 900'),
+                            'socket_timeout':20,
+                            'retries':2,
+                        }
+                        with yt_dlp.YoutubeDL(opts) as downloader:
+                            downloader.download([url])
+                if not target.exists() or not target.stat().st_size or target.stat().st_size>250*1024*1024:
+                    target.unlink(missing_ok=True)
+                    raise ValueError('Video unavailable, over 15 minutes, or larger than 250 MB.')
+                st.session_state.youtube_video={'path':str(target),'url':url}
+                st.success('YouTube video loaded. You can now calibrate the court and analyse it.')
+            except Exception as exc:
+                st.session_state.youtube_video=None
+                st.error(f'YouTube video could not be loaded: {exc}. Download an authorised MP4 and use Upload video instead.')
+    youtube_video=st.session_state.get('youtube_video')
+    if youtube_video and url!=youtube_video['url']:
+        youtube_video=None
+
+if file is not None or youtube_video:
     import hashlib
-    b=file.getvalue()
-    signature=hashlib.sha256(b).hexdigest()
+    if file is not None:
+        b=file.getvalue()
+        signature=hashlib.sha256(b).hexdigest()
+        suffix=Path(file.name).suffix.lower()
+        path=Path(tempfile.gettempdir())/f'pickletrack_{signature[:18]}{suffix}'
+        if not path.exists() or path.stat().st_size!=len(b): path.write_bytes(b)
+        player_video=b
+    else:
+        path=Path(youtube_video['path'])
+        signature='youtube:'+youtube_video['url']
+        player_video=youtube_video['url']
+        if not path.exists():
+            st.error('Temporary YouTube video expired. Click Load YouTube video again.')
+            st.stop()
     if signature != st.session_state.video_id:
         st.session_state.video_id=signature
         st.session_state.events=[]
         st.session_state.tracking=None
-    suffix=Path(file.name).suffix.lower()
-    path=Path(tempfile.gettempdir())/f'pickletrack_{signature[:18]}{suffix}'
-    if not path.exists() or path.stat().st_size!=len(b): path.write_bytes(b)
     try:
         info=video_info(path); frame=preview_frame(path)
     except Exception as exc:
@@ -49,7 +105,7 @@ if file:
     col1,col2=st.columns([1.25,1])
     with col1:
         st.subheader('Match footage')
-        st.video(b)
+        st.video(player_video)
         st.caption(f'{info["width"]}×{info["height"]} • {info["seconds"]:.1f}s • {info["fps"]:.1f} fps')
     with col2:
         st.subheader('Court calibration')
@@ -161,8 +217,8 @@ if file:
         st.download_button('Download rally review (CSV)',events.to_csv(index=False).encode(),'pickleball_rallies.csv','text/csv')
 else:
     st.subheader('How it works')
-    st.write('Upload a fixed-camera pickleball match video to unlock player tracking and the review-based missed-return dashboard.')
-    st.markdown('**Workflow:** Upload video → Calibrate 4 court corners → Run AI player tracking → Review rally outcomes and ball end zones → Compare missed-return percentages → Export CSV.')
+    st.write('Upload a fixed-camera pickleball match video or load a public YouTube link to unlock player tracking and the review-based missed-return dashboard.')
+    st.markdown('**Workflow:** Upload video or paste YouTube link → Calibrate 4 court corners → Run AI player tracking → Review rally outcomes and ball end zones → Compare missed-return percentages → Export CSV.')
     st.info('The application does not infer failed returns from a ball’s final position alone. This initial version uses manual outcome review for accurate denominators.')
 
 st.caption('Prototype • Video processing occurs on the Python application server. Use an appropriately secured/private deployment for personal match footage.')
